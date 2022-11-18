@@ -20,6 +20,82 @@ dependencies {
     paperclip("io.papermc:paperclip:3.0.2")
 }
 
+val upstreamRepos = HashMap<String, String>()
+upstreamRepos["paper"] = "PaperMC/Paper"
+upstreamRepos["purpur"] = "PurpurMC/Purpur"
+
+paperweight {
+    serverProject.set(project(":abomination-server"))
+
+    remapRepo.set(paperMavenPublicUrl)
+    decompileRepo.set(paperMavenPublicUrl)
+
+    val upstream = providers.gradleProperty("upstream").get().toLowerCase()
+
+    useStandardUpstream(upstream) {
+        url.set("https://github.com/" + upstreamRepos[upstream])
+        ref.set(providers.gradleProperty(upstream + "Ref"))
+
+        withStandardPatcher {
+            baseName(upstream)
+
+            apiPatchDir.set(layout.projectDirectory.dir("patches/api"))
+            apiOutputDir.set(layout.projectDirectory.dir("abomination-api"))
+
+            serverPatchDir.set(layout.projectDirectory.dir("patches/server"))
+            serverOutputDir.set(layout.projectDirectory.dir("abomination-server"))
+        }
+    }
+}
+
+for (area in listOf("Api", "Server")) {
+    tasks.getByName("apply" + area + "Patches").doFirst {
+        val upstream = providers.gradleProperty("upstream").get()
+        val patchesDir = layout.projectDirectory.dir("patches/" + area.toLowerCase()).asFile
+
+        // Clean up old patches first
+        patchesDir.listFiles()?.forEach {
+            val patchName = it.name.substring(it.name.indexOf("-") + 1)
+            for (upstreamName in upstreamRepos.keys) {
+                if (!(patchName.toLowerCase().startsWith(upstreamName.toLowerCase()))) continue;
+
+                it.delete()
+            }
+        }
+
+        val upstreamPatchesDir = File(patchesDir.parent, upstream.toLowerCase() + "-" + patchesDir.name)
+
+        if (upstreamPatchesDir.isDirectory) {
+            upstreamPatchesDir.listFiles()?.forEach {
+                it.copyTo(File(patchesDir, it.name))
+            }
+        }
+    }
+
+    tasks.getByName("rebuild" + area + "Patches").doLast {
+        val upstream = providers.gradleProperty("upstream").get()
+        val patchesDir = layout.projectDirectory.dir("patches/" + area.toLowerCase()).asFile
+
+        val upstreamPatchesDir = File(patchesDir.parent, upstream.toLowerCase() + "-" + patchesDir.name)
+
+        if (!upstreamPatchesDir.isDirectory) {
+            upstreamPatchesDir.mkdir()
+        }
+
+        // Clean up old patches first
+        upstreamPatchesDir.listFiles()?.forEach {
+            it.delete()
+        }
+
+        patchesDir.listFiles()?.forEach {
+            val patchName = it.name.substring(it.name.indexOf("-") + 1)
+            if (!(patchName.toLowerCase().startsWith(upstream.toLowerCase()))) return@forEach;
+
+            it.renameTo(File(upstreamPatchesDir, it.name))
+        }
+    }
+}
+
 allprojects {
     apply(plugin = "java")
     apply(plugin = "maven-publish")
@@ -46,66 +122,5 @@ subprojects {
     repositories {
         mavenCentral()
         maven(paperMavenPublicUrl)
-    }
-}
-
-paperweight {
-    serverProject.set(project(":abomination-server"))
-
-    remapRepo.set(paperMavenPublicUrl)
-    decompileRepo.set(paperMavenPublicUrl)
-
-    usePaperUpstream(providers.gradleProperty("paperRef")) {
-        withPaperPatcher {
-            apiPatchDir.set(layout.projectDirectory.dir("patches/api"))
-            apiOutputDir.set(layout.projectDirectory.dir("abomination-api"))
-
-            serverPatchDir.set(layout.projectDirectory.dir("patches/server"))
-            serverOutputDir.set(layout.projectDirectory.dir("abomination-server"))
-        }
-    }
-}
-
-//
-// Everything below here is optional if you don't care about publishing API or dev bundles to your repository
-//
-
-tasks.generateDevelopmentBundle {
-    apiCoordinates.set("me.noahvdaa.abomination:abomination-api")
-    mojangApiCoordinates.set("io.papermc.paper:paper-mojangapi")
-    libraryRepositories.set(
-        listOf(
-            "https://repo.maven.apache.org/maven2/",
-            paperMavenPublicUrl
-            // "https://my.repo/", // This should be a repo hosting your API (in this example, 'com.example.paperfork:forktest-api')
-        )
-    )
-}
-
-allprojects {
-    // Publishing API:
-    // ./gradlew :ForkTest-API:publish[ToMavenLocal]
-    publishing {
-        repositories {
-            maven {
-                name = "myRepoSnapshots"
-                url = uri("https://my.repo/")
-                // See Gradle docs for how to provide credentials to PasswordCredentials
-                // https://docs.gradle.org/current/samples/sample_publishing_credentials.html
-                credentials(PasswordCredentials::class)
-            }
-        }
-    }
-}
-
-publishing {
-    // Publishing dev bundle:
-    // ./gradlew publishDevBundlePublicationTo(MavenLocal|MyRepoSnapshotsRepository) -PpublishDevBundle
-    if (project.hasProperty("publishDevBundle")) {
-        publications.create<MavenPublication>("devBundle") {
-            artifact(tasks.generateDevelopmentBundle) {
-                artifactId = "dev-bundle"
-            }
-        }
     }
 }
